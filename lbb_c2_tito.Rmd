@@ -1,0 +1,359 @@
+---
+title: "Bank Marketing Prediction with Classification Model"
+author: "Tito Krisnawati"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    theme: cerulean
+    toc: true
+    toc_float:
+      collapsed: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+# clear-up the environment
+# chunk options
+knitr::opts_chunk$set(
+  message = FALSE,
+  warning = FALSE,
+  fig.align = "center",
+  comment = "#>"
+)
+options(scipen = 9999)
+```
+
+# Introduction
+## Our Purpose
+Data `bank-full.csv` merupakan data mengenai telemarketing dari sebuah bank di Portugal.
+Data `bank-full.csv` dapat dilihat diambil dari link berikut ini : <https://archive.ics.uci.edu/dataset/222/bank+marketing>
+
+Pada data ini, terdapat target variabel `Channel` yang merupakan tempat belanja (channel) customer membeli produk-produk yang dijual oleh distributor wholsale tersebut. Dengan kata lain, target variabel ini juga menandakan segmentasi customer terhadap produk-produk yang menjadi variabel prediktor di data ini nantinya.
+
+Pada kesempatan kali ini, saya akan menggunakan data tersebut untuk dapat memprediksi calon nasabah mana yang akan membeli product ketika di telepon oleh pihak bank.
+
+Algoritma yang akan saya gunakan yaitu menggunakan **Naive Bayes**, **Decision Tree** dan **Random Forest** yang termasuk dalam supervised learning.
+Kita juga akan evaluasi kedua model tersebut dan bandingkan, manakah model yang lebih baik evaluasinya dan berdasarkan dari sisi pemahaman bisnis nantinya, nilai evaluasi apa (akurasi, recall atau presisi) yang akan kita jadikan acuan dalam memilih model untuk prediksi apakah produk bank tersebut akan dibeli oleh nasabah atau tidak.
+
+## Preparation
+Kita panggil setiap library yang dibutuhkan dalam proses pembuatan model klasifikasi hingga evaluasi dan hasil interpretasi model nantinya.
+
+```{r message=F, warning=F}
+# untuk persiapan data
+library(dplyr)
+
+# untuk text processing
+library(tm)
+library(SnowballC) 
+library(inspectdf)
+
+# untuk keperluan machine learning
+library(e1071)
+library(caret)
+library(ROCR)
+library(caret)
+library(rsample)
+
+library(partykit)
+library(randomForest)
+```
+
+# Data Preparation
+## Read Dataset
+Kita mulai dengan membaca dataset `bank-full.csv` dan kita simpan dalam variabel `bank`. Kemudian untuk mempersingkat pre-processing data, kita langsung ubah setiap variabel dengan tipe data `character` menjadi tipe data `factor` dengan menggunakan parameter `stringsAsFactors = TRUE`
+```{r}
+bank <- read.csv("bank-full.csv", sep = ";", stringsAsFactors = T)
+head(bank)
+```
+
+Kita lihat tipe data dari setiap variabel-variabel dari data kita.
+```{r}
+glimpse(bank)
+```
+
+Berdasarkan investigasi di atas, data marketing bank memiliki 45.211 observasi dan 17 variabel. Berikut adalah deskripsi detail dari setiap kolom:
+
+- `age` : usia nasabah (dalam tahun)
+- `job`: jenis pekerjaan nasabah (categorical: "admin", "unknown", "unemployed", "management", "housemaid", "entrepreneur", "student", "blue-collar", "self-employed", "retired", "technician", "services")
+- `marital`: status pernikahan nasabah (categorical: "married", "divorced", "single")
+- `education`: pendidikan nasabah (categorical: "unknown", "secondary", "primary", "tertiary")
+- `default`: apakah memiliki kredit? (**yes** atau **no**)
+- `balance`: rata-rata saldo tahunan nasabah (dalam euro)
+- `housing`: memiliki kredit / pinjaman untuk rumah (**yes** atau **no**)
+- `loan`: memiliki pinjaman pribadi / personal loan (**yes** atau **no**)
+- `contact`: jenis alat komunikasi / kontak (categorical: "unknown", "telephone", "cellular")
+- `day`: hari terakhir di hubungi dalam bulan ini
+- `month`: bulan terakhir dihubungi dalam tahun ini
+- `duration`: lama durasi saat terakhir dihubungi (dalam satuan detik)
+- `campaign`: berapa kali banyaknya nasabah dihubungi dalam menwarkan produk ini untuk klien tersebut (termasuk kontak terakhir)
+- `pdays`: jumlah hari yang berlalu sejak nasabah terakhir dihubungi untuk penawaran produk (-1 berarti nasabah belum pernah dihubungi sebelumnya)
+- `previous`: jumlah kontak yang dilakukan sebelum penawaran produk ini dan untuk nasabah ini
+- `poutcome`: hasil dari penawaran produk / pemasaran sebelumnya (categorical: "unknown", "other", "failure", "success")
+- `y` : apakah nasabah setuju dengan penawaran produk bank ini (dalam case ini deposito)? (**yes** atau **no**)
+
+## Data Wrangling
+Kita mencoba untuk melihat persebaran data dari setiap variabel pada data tersebut.
+```{r}
+summary(bank)
+```
+
+# Cross-Validation
+
+Sebelum kita membuat model, kita harus membagi dataset menjadi data train dan test. Kita bagi data dengan proporsi 80% train dan 20% test menggunakan fungsi `sample()`, `set.seed(100)`, dan simpan ke dalam obyek `data_train` dan `data_test`. 
+
+```{r}
+RNGkind(sample.kind = "Rounding")
+set.seed(100)
+split_bank <- sample(nrow(bank), nrow(bank)*0.80)
+data_train <- bank[split_bank, ]
+data_test <- bank[-split_bank, ]
+```
+
+Kita lihat proporsi kelas target pada data train untuk memastikan apakah data train memiliki proporsi kelas target yang seimbang.
+
+> Yang menjadi variabel target kita adalah `y`, yaitu apakah nasabah setuju dengan penawaran produk bank ini (dalam case ini deposito)? 
+
+```{r}
+prop.table(table(data_train$y))
+```
+
+Berdasarkan proporsi di atas, dapat disimpulkan bahwa **proporsi kelas target tidak seimbang**
+
+Jadi, kita harus menyeimbangkannya sebelum menggunakannya pada model kita. Kita akan menggunakan metode *downsampling* pada `data_train` menggunakan fungsi `downSample()`, lalu kita simpan data hasil downsample dalam objek `data_train_down`.
+
+```{r}
+set.seed(100)
+data_train_down <- downSample(
+  x = data_train %>% select(-y),
+  y = data_train$y,
+  yname = "y"
+)
+
+head(data_train_down)
+```
+
+Kita lihat sekarang proporsi kelas target kita pada data train kita yang baru yaitu `data_train_down`
+
+```{r}
+prop.table(table(data_train_down$y))
+```
+Berdasarkan proporsi di atas, dapat disimpulkan bahwa **proporsi kelas target sudah seimbang**
+
+> Jadi, untuk tahapan selanjutnya, kita akan menggunakan `data_train_down` untuk pembuatan model Naive Bayes, Decision Tree, dan Random Forest.
+
+# Naive Bayes
+
+Setelah membagi data menjadi data train dan test serta melakukan downsample pada data train, kita akan membuat model pertama dengan algoritma Naive Bayes.
+
+```{r}
+model_naive <- naiveBayes(
+  formula = y ~ .,
+  data = data_train_down,
+  laplace = 1
+)
+
+model_naive
+```
+## Prediksi Naive Bayes
+Kita akan melakukan prediksi ke data test menggunakan `model_naive`. Kita menggunakan fungsi `predict()` dengan parameter `type = "class"` untuk mendapatkan prediksi kelas. Kemudian kita menyimpan hasil prediksi ke dalam objek `pred_naive`. 
+
+```{r}
+# your code here
+pred_naive <- predict(
+  object = model_naive,
+  newdata = data_test,
+  type = "class"
+)
+```
+
+## Evaluasi Model Naive Bayes
+Bagian terakhir, kita melakukan evaluasi model. Kita dapat memeriksa performa model Naive Bayes menggunakan `confusionMatrix()` dan membandingkan kelas hasil prediksi (`pred_naive`) dengan label sebenarnya dari `data_test`. Kita set status nasabah yang mengambil produk (deposito) yang telah ditawarkan sebagai kelas positif (`positive = "yes"`). 
+
+```{r}
+confusionMatrix(
+  data = pred_naive,
+  reference = data_test$y,
+  positive = "yes",
+  mode = "everything"
+)
+```
+
+
+# Decision Tree
+
+Sekarang, mari kita buat model **Decision Tree** menggunakan fungsi `ctree()` dan simpan ke dalam objek `model_dt`. Untuk melakukan *tuning* model, mari kita atur parameter `mincriterion = 0.95`.
+
+```{r}
+set.seed(100)
+model_dt <- ctree(formula = y ~ .,
+                  data = data_train_down,
+                  control = ctree_control(mincriterion = 0.95))
+```
+
+Untuk mendapatkan penggambaran yang lebih baik tentang model, mari kita buat plot dari model dan gunakan parameter `type = "simple"`.
+
+```{r fig.width=25}
+# your code here
+plot(model_dt, type = "simple")
+```
+
+## Prediksi Model Decision Tree
+Setelah kita membuat model, coba lakukan prediksi ke data test berdasarkan `model_dt` menggunakan fungsi `predict()` dengan mengatur parameter `type = "response"`.
+
+```{r}
+# your code here
+pred_dt <- predict(model_dt,
+                   data_test,
+                   type = "response")
+```
+
+
+## Evaluasi Model Decision Tree
+Untuk memeriksa performa model, kita dapat menggunakan `confusionMatrix()`. Kita set status nasabah yang mengambil produk (deposito) yang telah ditawarkan sebagai kelas positif (`positive = "yes"`). 
+
+```{r}
+# your code here
+confusionMatrix(
+  data = pred_dt,
+  reference = data_test$y,
+  positive = "yes",
+  mode = "everything"
+)
+```
+
+# Random Forest
+Model terakhir yang akan kita buat adalah **Random Forest**. 
+
+Sekarang, kita akan coba eksplorasi model random forest yang dibuat dengan menggunakan *hyperparameter* di bawah ini:
+
+- `set.seed(100)` # angka seed
+- `number = 5` # jumlah k-fold cross-validation
+- `repeats = 3` # jumlah iterasi
+
+> Perintah di bawah ini di komen, agar ketika di-knit tidak perlu dijalankan kembali.
+
+```{r}
+#set.seed(100)
+# # definisikan training control untuk repeated k-fold cross validation 
+# train_ctrl <- trainControl(method = "repeatedcv",
+#                            number = 5, # seberapa banyak kita ingin membagi data
+#                            repeats = 3) 
+ 
+# # training model random forest dengan train()
+# bank_forest <- train(y ~ .,
+#                    data = data_train_down,
+#                    method = "rf", # pilih metode random forest
+#                   trControl = train_ctrl)
+```
+
+Salah satu kelemahan random forest adalah pembuatan model yang membutuhkan waktu yang cukup lama. Practice yang baik selesai melakukan training adalah menyimpan model tersebut ke dalam bentuk file RDS dengan function `saveRDS()` agar model dapat langsung digunakan tanpa harus training dari awal. Jadi, agar bisa digunakan lebih cepat ke depannya, kita simpan model random forest yang telah kita buat tersebut yaitu `bank_forest` dalam sebuah file `model_rf.RDS`
+
+> Perintah ini dikomen agar ketika di-knit tidak dijalankan kembali, karena model sudah dibentuk
+```{r}
+# menyimpan model ke format RDS
+# saveRDS(bank_forest, "model_rf.RDS")
+```
+
+Untuk membaca model Random Forest yang sudah disimpan (`model_rf.RDS`), kita dapat  menggunakan fungsi `readRDS()` dan simpan ke dalam objek 
+`bank_forest`.
+
+```{r}
+bank_forest <- readRDS("model_rf.RDS")
+```
+
+
+Kemudian, lihatlah rangkuman final model dari model Random Forest menggunakan `bank_forest$finalModel`
+
+```{r}
+#library(randomForest)
+# your code here
+bank_forest$finalModel
+```
+
+Dalam praktiknya, random forest telah memiliki estimasi out-of-bag (OOB) yang merepresentasikan akurasi pada *out-of-bag data* (data yang tidak diambil ketika sampling/tidak digunakan dalam pembuatan random forest).
+
+Kita juga bisa menggunakan informasi *Variable Importance*, untuk mendapatkan daftar variabel penting yang digunakan pada model Random Forest. Banyak yang berargumen bahwa Random Forest, sebgai model *Black Box*, tidak dapat menawarkan informasi penting lain selain akurasinya yang amat tinggi. Namun, memberikan perhatian khusus pada atribut seperti *Variable Importance* sering kali membantu kita dalam mendapatkan informasi berharga tentang data.
+
+Untuk menentukan variabel yang memiliki pengaruh penting dalam menghasilkan prediksi (*Variable Importance*), kita dapat menggunakan fungsi `varImp()`, kemudian kita masukkan ke dalam fungsi `plot()` untuk mendapatkan visualisasinya.
+
+```{r fig.width=10}
+# your code here
+varImp(bank_forest) %>% plot()
+```
+
+## Prediksi Model Random Forest
+  
+Setelah membangun model, kini kita dapat memprediksi data test menggunakan `bank_forest`. Gunakan fungsi `predict()` dan atur parameter `type = "raw"` untuk mendapatkan prediksi kelas.
+
+```{r}
+# your code here
+pred_rf <- predict(
+  bank_forest,
+  data_test,
+  type = "raw"
+)
+```
+
+## Evaluasi Model Random Forest
+
+Selanjutnya, kita evaluasi model random forest dengan fungsi `confusionMatrix()`.
+
+```{r}
+# your code here
+confusionMatrix(
+  data = pred_rf,
+  reference = data_test$y,
+  positive = "yes",
+  mode = "everything"
+)
+```
+
+
+Cara lain untuk mengevaluasi performa model adalah dengan melihat nilai ROC dan AUC-nya. Untuk menghitungnya, kita membutuhkan *probabilitas ke kelas positif untuk setiap observasi*. Mari fokus pada nilai ROC dan AUC dari prediksi model Random Forest. Pertama, lakukan prediksi ke data test menggunakan `bank_forest` dengan menggunakan parameter `type = "prob"`. Akan dihasilkan prediksi nilai probabilitas untuk setiap kelas. Anda dapat menyimpan hasil prediksi ke dalam objek `prob_test`. 
+
+```{r}
+prob_test <- predict(bank_forest,
+                     data_test,
+                     type = "prob")
+
+prob_test[,"yes"]
+```
+
+Sekarang, gunakan fungsi `prediction()` dari package `ROCR` untuk membandingkan probability ke kelas positif yang tersimpan dalam `prob_test[,"yes"]` dengan data aktual `data_test$default`, kemudian simpan ke dalam objek `pred_roc`.
+
+```{r}
+pred_roc <- prediction(predictions = prob_test[,"yes"],
+                       labels = data_test$y)
+```
+
+Selanjutnya, gunakan fungsi `performance()` dari package ROCR dengan mendefinisikan axis plot untuk menghasilkan plot ROC. Simpan hasilnya ke dalam objek `perf`. Untuk menggunakan fungsi `performance()`, atur parameter di bawah ini:
+  - `prediction.obj = pred_roc`
+  - `measure = "tpr"`
+  - `x.measure = "fpr"`
+
+```{r}
+perf <- performance(pred_roc,
+                    "tpr",
+                    "fpr")
+```
+
+Setelah kita membuat objek `perf`, kita buat plot ROC dengan memasukkan objek `perf` ke dalam fungsi`plot()`.
+
+```{r}
+plot(perf)
+abline(0,1 , lty = 2) 
+```
+
+Untuk melakukan evaluasi kurva ROC tersebut, kita lihat apakah ada hasil yang tidak diinginkan dari model. Selanjutnya, kita mencari nilai AUC menggunakan fungsi `performance()` dengan mengatur parameter `prediction.obj = pred_roc` dan `measure = "auc"` lalu simpan ke dalam objek `auc`.
+
+```{r}
+auc <- performance(pred_roc, "auc")
+auc@y.values[[1]]
+```
+> Nilai AUC 92.46% berarti performa model baik dalam mengklasifikasikan kelas postif maupun kelas negatif
+
+
+# Conclusion
+Jika saya adalah seorang manager marketing di bank tersebut, dimana saya akan bertujuan untuk berusaha mendapatkan peluang sebesar-besarnya agar nasabah yang dihubungi oleh telemarketer saya menerima tawaran produk (deposito) yang kami tawarkan, maka saya akan memilih evaluasi **Recall / Sensitivity**. Hal ini juga terlihat dari ketiga model tersebut, nilai Recall jauh lebih tinggi dibandingkan dengan Presisi. Hal ini menunjukkan, data pada case ini memang cenderung mempertimbangkan evaluasi Recall.
+
+> Dari ketiga model di atas, Decision Tree dan Random Forest memiliki nilai evaluasi model yang tidak jauh berbeda. Namun dari segi cost / komputasi pembuatan model, Random Forest sangat lama. Jadi saya lebih memilih model **Decision Tree** sebagai model terbaik dalam pemecahan case ini
